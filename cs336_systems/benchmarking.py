@@ -6,16 +6,23 @@ Examples:
     uv run python -m cs336_systems.benchmarking --size small --warmup-steps 0
     uv run python -m cs336_systems.benchmarking --size small --mixed-precision bf16
     uv run python -m cs336_systems.benchmarking --d-model 512 --d-ff 2048 --num-layers 4 --num-heads 8
+    nsys profile --trace=cuda,nvtx --capture-range=nvtx --nvtx-capture=measure --capture-range-end=stop \
+        python -m cs336_systems.benchmarking --size small --context-length 512 --annotate-attention
 """
 
 import argparse
+import contextlib
+import math
 import timeit
 
 import pandas as pd
 import torch
+import torch.cuda.nvtx as nvtx
 
+import cs336_basics.MultiHeadSelfAttention as mhsa
 from cs336_basics.AdamW import AdamW
 from cs336_basics.CrossEntropy import cross_entropy
+from cs336_basics.Softmax import softmax
 from cs336_basics.TransformerLM import TransformerLM
 
 # Table 1 of the handout (Section 2.1.2).
@@ -57,6 +64,24 @@ def synchronize(device: str) -> None:
         torch.mps.synchronize()
 
 
+def nvtx_range(name: str, device: str):
+    """NVTX range on CUDA (visible in nsys); no-op elsewhere since non-CUDA builds lack NVTX."""
+    return nvtx.range(name) if device.startswith("cuda") else contextlib.nullcontext()
+
+
+@nvtx.range("scaled dot product attention")
+def annotated_scaled_dot_product_attention(Q, K, V, mask=None):
+    """Same math as cs336_basics' scaled_dot_product_attention, split into NVTX ranges (CUDA only)."""
+    with nvtx.range("computing attention scores"):
+        scores = Q @ K.transpose(-2, -1) / math.sqrt(Q.shape[-1])
+        if mask is not None:
+            scores = scores.masked_fill(~mask, -torch.inf)
+    with nvtx.range("computing softmax"):
+        probs = softmax(scores, dim=-1)
+    with nvtx.range("final matmul"):
+        return probs @ V
+
+
 def run_step(model, optimizer, x, y, mode: str, device: str, mixed_precision: str | None = None) -> dict[str, float]:
     """Run one step and return the wall-clock time (seconds) of each phase that ran."""
     phases = MODES[mode]
@@ -75,22 +100,24 @@ def run_step(model, optimizer, x, y, mode: str, device: str, mixed_precision: st
 
     # Forward-only runs without autograd (inference); the other modes build the graph.
     start = timeit.default_timer()
-    with torch.set_grad_enabled("backward" in phases), autocast:
+    with nvtx_range("forward", device), torch.set_grad_enabled("backward" in phases), autocast:
         logits = model(x)
         loss = cross_entropy(logits, y)
-    synchronize(device)
+        synchronize(device)
     times["forward"] = timeit.default_timer() - start
 
     if "backward" in phases:
         start = timeit.default_timer()
-        loss.backward()
-        synchronize(device)
+        with nvtx_range("backward", device):
+            loss.backward()
+            synchronize(device)
         times["backward"] = timeit.default_timer() - start
 
     if "optimizer" in phases:
         start = timeit.default_timer()
-        optimizer.step()
-        synchronize(device)
+        with nvtx_range("optimizer", device):
+            optimizer.step()
+            synchronize(device)
         times["optimizer"] = timeit.default_timer() - start
 
     times["total"] = sum(times.values())
@@ -112,10 +139,13 @@ def benchmark(args: argparse.Namespace, name: str, config: dict[str, int], devic
     x = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
     y = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length), device=device)
 
-    for _ in range(args.warmup_steps):
-        run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision)
+    # Under nsys, --nvtx-capture=measure records only the timed steps and skips the warmup.
+    with nvtx_range("warmup", device):
+        for _ in range(args.warmup_steps):
+            run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision)
 
-    steps = [run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision) for _ in range(args.steps)]
+    with nvtx_range("measure", device):
+        steps = [run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision) for _ in range(args.steps)]
 
     timings = pd.DataFrame(steps) * 1e3  # seconds -> ms
     num_params = sum(p.numel() for p in model.parameters())
@@ -158,6 +188,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mixed-precision", choices=list(AUTOCAST_DTYPES), default=None, help="Run the forward pass and loss under autocast with this dtype. Off (full FP32) if omitted.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--latex", action="store_true", help="Also print the results as a LaTeX table.")
+    p.add_argument("--annotate-attention", action="store_true", help="Swap in the NVTX-annotated attention so nsys splits scores / softmax / final matmul (CUDA only).")
     return p.parse_args()
 
 
@@ -168,6 +199,11 @@ def main() -> None:
     # so every run of the script produces the same "random" values.
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
+
+    # Patch the name MultiHeadSelfAttention looks up: it did `from ... import scaled_dot_product_attention`,
+    # so patching cs336_basics.ScaledDotProductAttention would not reach it.
+    if args.annotate_attention:
+        mhsa.scaled_dot_product_attention = annotated_scaled_dot_product_attention
 
     if args.size is not None:
         configs = {name: MODEL_SIZES[name] for name in args.size}
