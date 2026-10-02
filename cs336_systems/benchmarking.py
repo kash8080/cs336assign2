@@ -8,6 +8,7 @@ Examples:
     uv run python -m cs336_systems.benchmarking --d-model 512 --d-ff 2048 --num-layers 4 --num-heads 8
     nsys profile --trace=cuda,nvtx --capture-range=nvtx --nvtx-capture=measure --capture-range-end=stop \
         python -m cs336_systems.benchmarking --size small --context-length 512 --annotate-attention
+    uv run python -m cs336_systems.benchmarking --size xl --mode train --steps 1 --memory-profile
 """
 
 import argparse
@@ -67,6 +68,26 @@ def synchronize(device: str) -> None:
 def nvtx_range(name: str, device: str):
     """NVTX range on CUDA (visible in nsys); no-op elsewhere since non-CUDA builds lack NVTX."""
     return nvtx.range(name) if device.startswith("cuda") else contextlib.nullcontext()
+
+
+@contextlib.contextmanager
+def record_memory_history(path: str | None):
+    """Record CUDA allocations inside the block and save a snapshot for https://pytorch.org/memory_viz.
+
+    No-op if path is None. The snapshot is written even if the block raises (e.g. OOM), which is
+    usually when you want it most.
+    """
+    if path is None:
+        yield
+        return
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.memory._record_memory_history(max_entries=1_000_000)
+    try:
+        yield
+    finally:
+        torch.cuda.memory._dump_snapshot(path)
+        torch.cuda.memory._record_memory_history(enabled=None)
+        print(f"  peak memory {torch.cuda.max_memory_allocated() / 2**30:.2f} GiB, snapshot saved to {path}")
 
 
 @nvtx.range("scaled dot product attention")
@@ -144,7 +165,13 @@ def benchmark(args: argparse.Namespace, name: str, config: dict[str, int], devic
         for _ in range(args.warmup_steps):
             run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision)
 
-    with nvtx_range("measure", device):
+    # Memory history covers only the timed steps, so the snapshot isn't padded with warmup.
+    snapshot_path = None
+    if args.memory_profile is not None:
+        precision = args.mixed_precision or "fp32"
+        snapshot_path = f"{args.memory_profile}_{name}_ctx{args.context_length}_{args.mode}_{precision}.pickle"
+
+    with nvtx_range("measure", device), record_memory_history(snapshot_path):
         steps = [run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision) for _ in range(args.steps)]
 
     timings = pd.DataFrame(steps) * 1e3  # seconds -> ms
@@ -189,6 +216,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--latex", action="store_true", help="Also print the results as a LaTeX table.")
     p.add_argument("--annotate-attention", action="store_true", help="Swap in the NVTX-annotated attention so nsys splits scores / softmax / final matmul (CUDA only).")
+    p.add_argument("--memory-profile", nargs="?", const="memory_snapshot", default=None, metavar="PREFIX", help="Record CUDA memory history over the timed steps and save PREFIX_<size>_ctx<len>_<mode>_<precision>.pickle for pytorch.org/memory_viz (CUDA only). PREFIX defaults to memory_snapshot.")
     return p.parse_args()
 
 
@@ -199,6 +227,8 @@ def main() -> None:
     # so every run of the script produces the same "random" values.
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
+    if args.memory_profile is not None and not device.startswith("cuda"):
+        raise SystemExit(f"--memory-profile needs CUDA, got device={device}")
 
     # Patch the name MultiHeadSelfAttention looks up: it did `from ... import scaled_dot_product_attention`,
     # so patching cs336_basics.ScaledDotProductAttention would not reach it.
