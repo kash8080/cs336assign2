@@ -1,0 +1,747 @@
+<title>Nested Checkpointing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column; the simulator is the centrepiece, framed like an instrument panel. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --surface-2: #e9edf2;
+  --fg: #16202b;
+  --muted: #5b6979;
+  --line: #d3dae3;
+  --fwd: #2d68d6;
+  --rec: #7a4ad4;
+  --bwd: #cc3d63;
+  --res: #c97d0a;
+  --act: #10897a;
+  --ink-on: #ffffff;
+  --s-none: #8a96a4;
+  --s-flat: #10897a;
+  --s-tree: #c97d0a;
+  --s-chain: #2d68d6;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1319; --surface: #151c24; --surface-2: #1d2630; --fg: #e3e8ee; --muted: #93a1b2; --line: #2b3643;
+    --fwd: #6b9bf2; --rec: #a888f2; --bwd: #ef7196; --res: #efa63a; --act: #3cc3ae; --ink-on: #0e1319;
+    --s-none: #7d8a99; --s-flat: #3cc3ae; --s-tree: #efa63a; --s-chain: #6b9bf2;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1319; --surface: #151c24; --surface-2: #1d2630; --fg: #e3e8ee; --muted: #93a1b2; --line: #2b3643;
+  --fwd: #6b9bf2; --rec: #a888f2; --bwd: #ef7196; --res: #efa63a; --act: #3cc3ae; --ink-on: #0e1319;
+  --s-none: #7d8a99; --s-flat: #3cc3ae; --s-tree: #efa63a; --s-chain: #6b9bf2;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1000px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 80px; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.12; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(34px, 6vw, 52px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 26px; font-weight: 600; }
+h3 { font-size: 17px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+.eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.stack { display: grid; gap: 14px; }
+.lede { font-size: 18px; color: var(--muted); max-width: 64ch; }
+.lede b { color: var(--fg); font-weight: 600; }
+section > .head { display: grid; gap: 8px; margin-bottom: 20px; }
+
+/* tokens used in prose */
+.t { display: inline-block; padding: 0 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.86em; font-weight: 500; line-height: 1.5; }
+.t.h { background: color-mix(in srgb, var(--act) 18%, transparent); color: var(--act); }
+.t.r { background: color-mix(in srgb, var(--res) 20%, transparent); color: var(--res); }
+.t.g { background: color-mix(in srgb, var(--bwd) 16%, transparent); color: var(--bwd); }
+.t.c { background: color-mix(in srgb, var(--rec) 16%, transparent); color: var(--rec); }
+
+/* ---------- rule cards ---------- */
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 12px; min-width: 0; align-content: start; }
+.card svg { width: 100%; height: auto; display: block; }
+.card ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; max-width: 64ch; }
+.svg-text { fill: var(--fg); font-family: var(--font-mono); font-size: 13px; }
+.svg-muted { fill: var(--muted); font-family: var(--font-body); font-size: 12px; }
+.svg-box { fill: var(--surface-2); stroke: var(--line); stroke-width: 1.5; }
+.svg-h { fill: color-mix(in srgb, var(--act) 18%, var(--surface)); stroke: var(--act); stroke-width: 1.5; }
+.svg-r { fill: color-mix(in srgb, var(--res) 22%, var(--surface)); stroke: var(--res); stroke-width: 1.5; }
+.svg-r-gone { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.svg-g { fill: color-mix(in srgb, var(--bwd) 16%, var(--surface)); stroke: var(--bwd); stroke-width: 1.5; }
+.svg-fwd { stroke: var(--fwd); stroke-width: 2; fill: none; }
+.svg-bwd { stroke: var(--bwd); stroke-width: 2; fill: none; }
+.svg-resl { stroke: var(--res); stroke-width: 2; fill: none; stroke-dasharray: 3 3; }
+.svg-ck { stroke: var(--rec); stroke-width: 2; fill: none; }
+.svg-ck-text { fill: var(--rec); font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
+
+/* ---------- simulator ---------- */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.panel-top { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 14px 24px; align-items: center; justify-content: space-between; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.tab { font: 500 14px/1 var(--font-body); padding: 9px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.tab:hover { border-color: var(--muted); }
+.tab[aria-selected="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.tab .pill { font: 600 10px/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 5px; border-radius: 4px; background: var(--fwd); color: var(--ink-on); }
+.nctl { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+.nctl input { width: 130px; accent-color: var(--fwd); }
+.nctl output { color: var(--fg); font-weight: 600; min-width: 2ch; }
+.panel-body { padding: 20px; display: grid; gap: 22px; }
+.watch { font-size: 14px; color: var(--muted); max-width: 80ch; }
+.watch b { color: var(--fg); font-weight: 600; }
+
+.lane-wrap { overflow-x: auto; padding-bottom: 4px; }
+.lane { display: grid; row-gap: 6px; min-width: 520px; }
+.hlab { font: 500 10px/1 var(--font-mono); color: var(--muted); text-align: center; align-self: end; white-space: nowrap; }
+.hcell { display: flex; justify-content: center; }
+.hbar { width: 6px; border-radius: 3px; background: var(--line); height: 100%; transition: background .15s; }
+.hcell.on .hbar { background: var(--act); width: 9px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--act) 22%, transparent); }
+.blk { border: 1.5px solid var(--line); border-radius: 7px; background: var(--bg); padding: 7px 4px 6px; text-align: center; display: grid; gap: 2px; min-height: 64px; align-content: center; transition: background .15s, border-color .15s; }
+.blk .nm { font: 600 15px/1.1 var(--font-mono); }
+.blk .st { font: 500 10px/1.2 var(--font-mono); color: var(--muted); min-height: 12px; }
+.blk .rc { font: 600 10px/1.2 var(--font-mono); color: var(--rec); min-height: 12px; }
+.blk.done { border-color: color-mix(in srgb, var(--bwd) 45%, var(--line)); }
+.blk.done .st { color: var(--bwd); }
+.blk.pending { border-style: dashed; border-color: var(--rec); }
+.blk.k-fwd-save { background: var(--fwd); border-color: var(--fwd); }
+.blk.k-fwd-nosave { background: color-mix(in srgb, var(--fwd) 16%, var(--bg)); border-color: var(--fwd); }
+.blk.k-rec-save { background: var(--rec); border-color: var(--rec); }
+.blk.k-rec-nosave { background: color-mix(in srgb, var(--rec) 16%, var(--bg)); border-color: var(--rec); }
+.blk.k-bwd { background: var(--bwd); border-color: var(--bwd); }
+.blk.k-fwd-save *, .blk.k-rec-save *, .blk.k-bwd * { color: var(--ink-on) !important; }
+.res { height: 26px; border-radius: 5px; border: 1.5px dashed var(--line); display: grid; place-items: center; font: 600 11px/1 var(--font-mono); color: transparent; }
+.res.on { background: var(--res); border: 1.5px solid var(--res); color: var(--ink-on); }
+.brk { border: 2px solid color-mix(in srgb, var(--rec) 40%, var(--line)); border-top: none; border-radius: 0 0 6px 6px; height: 16px; position: relative; margin-inline: 1px; }
+.brk span { position: absolute; left: 50%; bottom: -1px; transform: translate(-50%, 50%); font: 600 10px/1 var(--font-mono); color: var(--muted); background: var(--surface); padding: 0 4px; white-space: nowrap; }
+.brk.sup { border-color: var(--fwd); }
+.brk.sup span { color: var(--fwd); }
+.brk.act { border-color: var(--rec); border-width: 3px; border-top: none; }
+.brk.act span { color: var(--rec); }
+.lane-key { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+.lane-key i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+
+.narr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; background: var(--bg); border-radius: 9px; padding: 14px 16px; border: 1px solid var(--line); }
+.narr .phase { font: 600 11px/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+.narr p { font-size: 15px; }
+.counters { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 18px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.counters b { display: block; font-size: 20px; color: var(--fg); font-weight: 600; }
+@media (max-width: 620px) { .narr { grid-template-columns: 1fr; } .counters { text-align: left; } }
+
+.membar-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+.membar-head b { color: var(--fg); font-family: var(--font-mono); }
+.membar { height: 34px; border-radius: 6px; background: var(--surface-2); display: flex; overflow: hidden; position: relative; }
+.membar .seg { height: 100%; border-right: 1px solid var(--surface); display: grid; place-items: center; font: 600 10px/1 var(--font-mono); color: var(--ink-on); overflow: hidden; white-space: nowrap; transition: width .15s; }
+.seg.h { background: var(--act); }
+.seg.r { background: var(--res); }
+.seg.g { background: var(--bwd); }
+.membar .peakmark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--fg); opacity: .55; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.btn { font: 500 14px/1 var(--font-body); padding: 9px 13px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--fwd); border-color: var(--fwd); color: var(--ink-on); min-width: 80px; }
+.controls input[type=range] { flex: 1 1 200px; accent-color: var(--fwd); min-width: 0; }
+.controls select { font: 500 13px var(--font-mono); padding: 7px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); }
+.stepno { font: 500 13px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 9ch; text-align: right; }
+:focus-visible { outline: 2px solid var(--fwd); outline-offset: 2px; }
+
+#timeline { width: 100%; display: block; cursor: pointer; }
+.tl-cap { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.tl-cap i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+
+/* ---------- compare ---------- */
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.charts svg { width: 100%; height: auto; display: block; }
+.ax { stroke: var(--line); stroke-width: 1; }
+.ax-t { fill: var(--muted); font: 11px var(--font-mono); }
+.ln-lab { font: 600 12px var(--font-body); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 14px; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 11px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.hl td { background: color-mix(in srgb, var(--s-chain) 9%, transparent); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+
+/* ---------- code ---------- */
+.codes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 18px; }
+.codes > div { min-width: 0; }
+pre { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; font: 13px/1.6 var(--font-mono); }
+pre .cm { color: var(--muted); }
+pre .kw { color: var(--rec); }
+pre .ck { color: var(--fwd); font-weight: 600; }
+.codecap { font-size: 13px; color: var(--muted); margin-top: 8px; }
+.expand { font: 14px/1.9 var(--font-mono); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; white-space: nowrap; }
+.expand .c1 { color: var(--rec); font-weight: 600; }
+.expand .x0 { background: color-mix(in srgb, var(--act) 18%, transparent); color: var(--act); padding: 0 4px; border-radius: 3px; }
+
+.answer { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--s-chain); border-radius: 10px; padding: 22px; display: grid; gap: 12px; }
+.answer p { max-width: 74ch; }
+.note { font-size: 13px; color: var(--muted); }
+</style>
+
+<main class="wrap">
+  <header class="stack">
+    <div class="eyebrow">CS336 · gradient_checkpointing (a)</div>
+    <h1>Nested Checkpointing</h1>
+    <p class="lede">Backprop through a block needs the intermediate values that block produced on the way forward. You can <b>keep</b> them, which costs memory, or <b>throw them away and rebuild them</b> when backward needs them, which costs compute. Nesting checkpoints lets you push that trade all the way: only one block's worth of intermediates ever exists at once.</p>
+  </header>
+
+  <!-- ===== The two rules ===== -->
+  <section>
+    <div class="head">
+      <div class="eyebrow">The two facts you need</div>
+      <h2>What a block keeps, and what a checkpoint changes</h2>
+    </div>
+    <div class="rules">
+      <div class="card">
+        <h3>1. Backward through block i needs its residuals <span class="t r">Rᵢ</span></h3>
+        <svg viewBox="0 0 520 250" role="img" aria-label="Block i takes h_i to h_i+1 in forward and saves residuals R_i; backward uses R_i to turn the gradient of h_i+1 into the gradient of h_i.">
+          <defs>
+            <marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--fwd)"/></marker>
+            <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--bwd)"/></marker>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--res)"/></marker>
+          </defs>
+          <text x="8" y="18" class="svg-muted">FORWARD</text>
+          <rect x="8" y="34" width="70" height="38" rx="6" class="svg-h"/><text x="43" y="58" text-anchor="middle" class="svg-text">hᵢ</text>
+          <line x1="80" y1="53" x2="168" y2="53" class="svg-fwd" marker-end="url(#af)"/>
+          <rect x="172" y="28" width="176" height="50" rx="8" class="svg-box"/><text x="260" y="51" text-anchor="middle" class="svg-text">block i</text><text x="260" y="68" text-anchor="middle" class="svg-muted">attention + MLP</text>
+          <line x1="350" y1="53" x2="438" y2="53" class="svg-fwd" marker-end="url(#af)"/>
+          <rect x="442" y="34" width="70" height="38" rx="6" class="svg-h"/><text x="477" y="58" text-anchor="middle" class="svg-text">hᵢ₊₁</text>
+          <line x1="260" y1="80" x2="260" y2="104" class="svg-resl" marker-end="url(#ar)"/>
+          <rect x="172" y="108" width="176" height="40" rx="6" class="svg-r"/><text x="260" y="133" text-anchor="middle" class="svg-text">Rᵢ  (big)</text>
+          <line x1="260" y1="150" x2="260" y2="176" class="svg-resl" marker-end="url(#ar)"/>
+          <text x="8" y="168" class="svg-muted">BACKWARD</text>
+          <rect x="8" y="190" width="70" height="38" rx="6" class="svg-g"/><text x="43" y="214" text-anchor="middle" class="svg-text">∇hᵢ</text>
+          <line x1="170" y1="209" x2="82" y2="209" class="svg-bwd" marker-end="url(#ab)"/>
+          <rect x="172" y="182" width="176" height="50" rx="8" class="svg-box"/><text x="260" y="211" text-anchor="middle" class="svg-text">block i backward</text>
+          <line x1="440" y1="209" x2="352" y2="209" class="svg-bwd" marker-end="url(#ab)"/>
+          <rect x="442" y="190" width="70" height="38" rx="6" class="svg-g"/><text x="477" y="214" text-anchor="middle" class="svg-text">∇hᵢ₊₁</text>
+        </svg>
+        <p><span class="t h">hᵢ</span> is the activation passed between blocks (batch × seq × d_model). <span class="t r">Rᵢ</span> is everything block i saved for backward: attention probabilities, the MLP hidden layer, norm statistics. It is many times bigger than <span class="t h">hᵢ</span>. On this page one <span class="t h">h</span> = 1 unit and one <span class="t r">R</span> = 8 units (illustrative).</p>
+        <p>Without checkpointing, the forward pass keeps every <span class="t r">Rᵢ</span> alive until backward reaches block i. That is N of them at the peak.</p>
+      </div>
+      <div class="card">
+        <h3>2. A checkpoint keeps only its input</h3>
+        <svg viewBox="0 0 520 200" role="img" aria-label="A checkpoint around blocks a to c keeps only its input h_a; residuals inside are dropped and rebuilt during backward.">
+          <path d="M60,26 V14 H470 V26" class="svg-ck"/>
+          <text x="265" y="10" text-anchor="middle" class="svg-ck-text">checkpoint( … )</text>
+          <rect x="4" y="40" width="48" height="34" rx="6" class="svg-h"/><text x="28" y="62" text-anchor="middle" class="svg-text">hₐ</text>
+          <text x="28" y="94" text-anchor="middle" class="svg-muted">kept</text>
+          <g>
+            <rect x="70" y="32" width="110" height="48" rx="8" class="svg-box"/><text x="125" y="61" text-anchor="middle" class="svg-text">block a</text>
+            <rect x="200" y="32" width="110" height="48" rx="8" class="svg-box"/><text x="255" y="61" text-anchor="middle" class="svg-text">block b</text>
+            <rect x="330" y="32" width="110" height="48" rx="8" class="svg-box"/><text x="385" y="61" text-anchor="middle" class="svg-text">block c</text>
+            <line x1="182" y1="56" x2="198" y2="56" class="svg-fwd"/><line x1="312" y1="56" x2="328" y2="56" class="svg-fwd"/>
+            <rect x="85" y="92" width="80" height="26" rx="5" class="svg-r-gone"/><text x="125" y="110" text-anchor="middle" class="svg-muted">Rₐ dropped</text>
+            <rect x="215" y="92" width="80" height="26" rx="5" class="svg-r-gone"/><text x="255" y="110" text-anchor="middle" class="svg-muted">R_b dropped</text>
+            <rect x="345" y="92" width="80" height="26" rx="5" class="svg-r-gone"/><text x="385" y="110" text-anchor="middle" class="svg-muted">R_c dropped</text>
+          </g>
+          <text x="4" y="150" class="svg-muted">During backward, when the gradient reaches this region:</text>
+          <text x="4" y="172" class="svg-text" style="font-size:12px">rerun a → b → c from hₐ (keeping R this time),</text>
+          <text x="4" y="192" class="svg-text" style="font-size:12px">then backprop through them and free the R's.</text>
+        </svg>
+        <p><b>The nesting rule.</b> While a checkpoint reruns its region, any checkpoint <i>inside</i> that region acts like a checkpoint again: it keeps only its own input and drops its insides. That is what makes nesting useful. It lets you choose, at every level of the rerun, how much gets kept.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Simulator ===== -->
+  <section id="sim">
+    <div class="head">
+      <div class="eyebrow">Step through it</div>
+      <h2>Watch memory during one training step</h2>
+      <p class="note">Each step is one block running. Pick a strategy and press Play, or drag the slider. Arrow keys step too.</p>
+    </div>
+    <div class="panel">
+      <div class="panel-top">
+        <div class="tabs" role="tablist" id="tabs"></div>
+        <label class="nctl" for="nIn">N blocks <input id="nIn" type="range" min="2" max="10" value="6"><output id="nOut">6</output></label>
+      </div>
+      <div class="panel-body">
+        <p class="watch" id="watch"></p>
+
+        <div>
+          <div class="lane-wrap"><div class="lane" id="lane"></div></div>
+          <div class="lane-key" style="margin-top:10px">
+            <span><i style="background:var(--fwd)"></i>forward, keeps R</span>
+            <span><i style="background:color-mix(in srgb,var(--fwd) 16%,var(--bg));border:1.5px solid var(--fwd)"></i>forward inside a checkpoint, keeps nothing</span>
+            <span><i style="background:var(--rec)"></i>rerun, keeps R</span>
+            <span><i style="background:color-mix(in srgb,var(--rec) 16%,var(--bg));border:1.5px solid var(--rec)"></i>rerun, keeps nothing</span>
+            <span><i style="background:var(--bwd)"></i>backward</span>
+            <span><i style="background:var(--act)"></i>hⱼ kept in memory</span>
+            <span><i style="background:var(--res)"></i>Rᵢ kept in memory</span>
+            <span class="mono" style="color:var(--rec)">↻n = times rerun</span>
+          </div>
+        </div>
+
+        <div class="narr" aria-live="polite">
+          <div><div class="phase" id="phase"></div><p id="narr"></p></div>
+          <div class="counters">
+            <div>block forwards<b id="cF">0</b></div>
+            <div>block backwards<b id="cB">0</b></div>
+            <div>memory now<b id="cM">0</b></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="membar-head"><span>Live activation memory (bar width = no-checkpointing peak, <b id="noneMax"></b> units)</span><span>now <b id="memNow"></b> · peak so far <b id="memPeak"></b></span></div>
+          <div class="membar" id="membar"></div>
+        </div>
+
+        <div class="controls">
+          <button class="btn" id="bRestart" aria-label="Restart">⟲</button>
+          <button class="btn" id="bPrev" aria-label="Previous step">◀</button>
+          <button class="btn primary" id="bPlay">Play</button>
+          <button class="btn" id="bNext" aria-label="Next step">▶</button>
+          <input type="range" id="scrub" min="0" max="1" value="0" aria-label="Step">
+          <span class="stepno" id="stepno"></span>
+          <select id="speed" aria-label="Speed"><option value="900">0.5×</option><option value="450" selected>1×</option><option value="200">2×</option><option value="80">5×</option></select>
+        </div>
+
+        <div>
+          <div class="membar-head"><span>Memory at every step of this strategy (click to jump)</span><span id="tlPeak"></span></div>
+          <svg id="timeline" height="150"></svg>
+          <div class="tl-cap">
+            <span><i style="background:var(--fwd)"></i>forward</span>
+            <span><i style="background:var(--rec)"></i>rerun</span>
+            <span><i style="background:var(--bwd)"></i>backward</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Compare ===== -->
+  <section id="compare">
+    <div class="head">
+      <div class="eyebrow">Scaling with N</div>
+      <h2>Memory goes down, recompute goes up</h2>
+      <p class="note">Numbers come from running the same simulator for N = 1 to 20. The dashed line marks the N on the slider above.</p>
+    </div>
+    <div class="charts">
+      <div class="card"><h3>Peak activation memory (units)</h3><svg id="chMem" viewBox="0 0 480 290"></svg></div>
+      <div class="card"><h3>Block forward passes (incl. reruns)</h3><svg id="chCmp" viewBox="0 0 480 290"></svg></div>
+    </div>
+    <div class="card" style="margin-top:18px">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Strategy</th><th>Kept after forward</th><th>Peak memory</th><th>Forward compute</th><th class="num" id="thN">At N = 6</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ===== Code ===== -->
+  <section id="code">
+    <div class="head">
+      <div class="eyebrow">Code</div>
+      <h2>The whole change is the layer loop</h2>
+    </div>
+    <div class="codes">
+      <div>
+        <pre><span class="cm"># today: assignment1-basics/cs336_basics/TransformerLM.py</span>
+<span class="cm"># TransformerLM.forward</span>
+tp = torch.arange(in_indices.shape[-1], device=in_indices.device)
+<span class="kw">for</span> layer <span class="kw">in</span> self.layers:
+    output = layer(output, tp)</pre>
+        <p class="codecap">Every layer keeps its residuals until backward reaches it.</p>
+      </div>
+      <div>
+        <pre><span class="kw">from</span> torch.utils.checkpoint <span class="kw">import</span> checkpoint
+
+<span class="kw">def</span> chain(blocks, x, tp):
+    <span class="kw">def</span> run(k, h):          <span class="cm"># applies blocks[0..k-1]</span>
+        <span class="kw">if</span> k == 1:
+            <span class="kw">return</span> blocks[0](h, tp)
+        h = <span class="ck">checkpoint</span>(run, k - 1, h, use_reentrant=<span class="kw">False</span>)
+        <span class="kw">return</span> blocks[k - 1](h, tp)
+    <span class="kw">return</span> <span class="ck">checkpoint</span>(run, len(blocks), x, use_reentrant=<span class="kw">False</span>)
+
+output = chain(self.layers, output, tp)</pre>
+        <p class="codecap">Nested chain: O(1) memory, O(N²) compute.</p>
+      </div>
+      <div>
+        <pre><span class="kw">def</span> tree(blocks, x, tp):
+    <span class="kw">if</span> len(blocks) == 1:
+        <span class="kw">return</span> blocks[0](x, tp)
+    mid = len(blocks) // 2
+    x = <span class="ck">checkpoint</span>(tree, blocks[:mid], x, tp, use_reentrant=<span class="kw">False</span>)
+    <span class="kw">return</span> <span class="ck">checkpoint</span>(tree, blocks[mid:], x, tp, use_reentrant=<span class="kw">False</span>)
+
+output = tree(self.layers, output, tp)</pre>
+        <p class="codecap">Halving tree: O(log N) memory, O(N log N) compute. A good practical middle ground.</p>
+      </div>
+    </div>
+    <div class="stack" style="margin-top:22px">
+      <h3>What <code>chain</code> expands to for N = 4</h3>
+      <div class="expand">
+        <span class="c1">C4</span>( <span class="c1">C3</span>( <span class="c1">C2</span>( <span class="c1">C1</span>( <span class="x0">x₀</span> → B0 ) → B1 ) → B2 ) → B3 )
+      </div>
+      <p>Every checkpoint <span class="t c">Cₖ</span> starts at the same tensor, <span class="t h">x₀</span>, so each one's "saved input" is just another reference to it. Nothing new gets stored. When backward reaches B3, C4 reruns B0–B3 from x₀. B0–B2 run inside C3, so they keep nothing, and only B3 keeps <span class="t r">R₃</span>. Then C3 reruns B0–B2 so that only B2 keeps <span class="t r">R₂</span>, and so on down the chain. B0 gets rerun N times, which is where the N²/2 compute comes from.</p>
+    </div>
+  </section>
+
+  <!-- ===== Answer ===== -->
+  <section>
+    <div class="head">
+      <div class="eyebrow">Written answer</div>
+      <h2>Part (a) in five sentences</h2>
+    </div>
+    <div class="answer">
+      <p>Nest the checkpoints as a left-leaning chain, C<sub>k</sub> = checkpoint(B<sub>k−1</sub> ∘ C<sub>k−1</sub>), with the outermost C<sub>N</sub> wrapping the whole stack. Every checkpoint in the chain saves the same tensor, the stack input x₀. As a result the forward pass keeps no per-block residuals at all.</p>
+      <p>During backward, reaching block k reruns blocks 0…k−1 from x₀. Blocks 0…k−2 run inside the inner checkpoint and keep nothing. Only block k−1 rebuilds its residuals, which are freed right after its backward step.</p>
+      <p>At any moment only one block's residuals (plus x₀ and the gradient in flight) are alive. Peak activation memory is <b>O(1)</b> in N, the minimum possible, because backprop through a block needs that block's residuals. Compute is <b>O(N²)</b>: N + N(N+1)/2 block forwards. Flat checkpointing cannot get below O(√N), and the halving tree trades this down to O(log N) memory for O(N log N) compute.</p>
+      <p class="note">Practical caveat: the chain nests N checkpoints deep. Use <code>use_reentrant=False</code>. The reentrant version keeps each level's recomputed output alive during backward, which brings back O(N) boundary tensors (the "bookkeeping" the problem says to ignore).</p>
+    </div>
+  </section>
+</main>
+
+<script>
+(function () {
+  const R = 8; // residual size in units of one boundary activation
+  const range = n => Array.from({ length: n }, (_, i) => i);
+  const $ = s => document.querySelector(s);
+
+  const STRATS = [
+    { id: 'none', name: 'No checkpointing', color: '--s-none',
+      watch: '<b>What to watch:</b> each block keeps its residuals, so memory climbs by one R per block during forward. It peaks when forward ends with all N of them alive, then drains as backward frees them one by one. Nothing is rerun.',
+      kept: 'every hᵢ and Rᵢ', mem: 'O(N)', cmp: 'N' },
+    { id: 'flat', name: 'Checkpoint each block', color: '--s-flat',
+      watch: '<b>What to watch:</b> forward keeps only each block\'s input hᵢ (teal bars), which is small. Backward reruns one block at a time to rebuild its R. The peak is one R plus N small inputs: still O(N), just with a smaller constant.',
+      kept: 'every hᵢ', mem: 'O(N), small constant', cmp: '2N' },
+    { id: 'chain', name: 'Nested chain', color: '--s-chain', tag: 'answer',
+      watch: '<b>What to watch:</b> the brackets are nested checkpoints C1 ⊂ C2 ⊂ … ⊂ CN, and all of them start at h0. Forward keeps only h0. Backward rebuilds each block\'s R by rerunning everything below it from h0. Only one R ever exists, so the peak stays flat as N grows, while the ↻ counts show the cost.',
+      kept: 'only x₀', mem: 'O(1)', cmp: 'N + N(N+1)/2 = O(N²)' },
+    { id: 'tree', name: 'Halving tree', color: '--s-tree',
+      watch: '<b>What to watch:</b> each checkpoint covers half of its parent. During backward about log₂N saved inputs are alive (one per level of the tree), and each block is rerun about log₂N times.',
+      kept: 'one hⱼ per tree level', mem: 'O(log N)', cmp: 'O(N log N)' },
+  ];
+
+  // ---------- program construction ----------
+  function build(kind, N) {
+    const cks = [];
+    const B = i => ({ t: 'B', i });
+    const C = (kids, lo, hi, label) => { const n = { t: 'C', kids, lo, hi, label }; cks.push(n); return n; };
+    let prog;
+    if (kind === 'none') prog = range(N).map(B);
+    else if (kind === 'flat') prog = range(N).map(i => C([B(i)], i, i + 1, 'C' + i));
+    else if (kind === 'chain') {
+      let node = C([B(0)], 0, 1, 'C1');
+      for (let k = 2; k <= N; k++) node = C([node, B(k - 1)], 0, k, 'C' + k);
+      prog = [node];
+    } else {
+      const lab = (lo, hi) => hi - lo === 1 ? 'C' + lo : 'C' + lo + '–' + (hi - 1);
+      const bin = (lo, hi) => {
+        if (hi - lo === 1) return [B(lo)];
+        const m = (lo + hi) >> 1;
+        return [C(bin(lo, m), lo, m, lab(lo, m)), C(bin(m, hi), m, hi, lab(m, hi))];
+      };
+      prog = bin(0, N);
+    }
+    let maxDepth = -1;
+    (function walk(nodes, d) { for (const n of nodes) if (n.t === 'C') { n.depth = d; maxDepth = Math.max(maxDepth, d); walk(n.kids, d + 1); } })(prog, 0);
+    return { prog, cks, maxDepth };
+  }
+
+  // ---------- simulator (refcounted tensors, non-reentrant checkpoint semantics) ----------
+  function simulate(kind, N) {
+    const { prog, cks, maxDepth } = build(kind, N);
+    const ref = new Map();
+    const inc = n => ref.set(n, (ref.get(n) || 0) + 1);
+    const dec = n => { const c = (ref.get(n) || 0) - 1; if (c <= 0) ref.delete(n); else ref.set(n, c); };
+    let cur = null, grad = false, nF = 0, nB = 0, peak = 0;
+    const setCur = n => { if (n) inc(n); if (cur) dec(cur); cur = n; };
+    const recs = Array(N).fill(0);
+    const done = new Set();
+    const steps = [];
+    const snap = ev => {
+      let mem = grad ? 1 : 0;
+      for (const k of ref.keys()) mem += k[0] === 'R' ? R : 1;
+      peak = Math.max(peak, mem);
+      steps.push(Object.assign({ live: new Set(ref.keys()), grad, mem, peak, nF, nB, recs: recs.slice(), done: new Set(done) }, ev));
+    };
+    function fwd(nodes, save, phase, stack, rc) {
+      for (const nd of nodes) {
+        if (nd.t === 'B') {
+          nF++;
+          if (phase === 'rec') recs[nd.i]++;
+          if (save) { inc('h' + nd.i); inc('R' + nd.i); }
+          setCur('h' + (nd.i + 1));
+          snap({ kind: phase + (save ? '-save' : '-nosave'), block: nd.i, stack: stack.slice(), rc });
+        } else {
+          if (save) inc('h' + nd.lo);
+          fwd(nd.kids, false, phase, stack.concat([nd]), rc);
+        }
+      }
+    }
+    function bwd(nodes) {
+      for (let j = nodes.length - 1; j >= 0; j--) {
+        const nd = nodes[j];
+        if (nd.t === 'B') {
+          nB++; dec('R' + nd.i); dec('h' + nd.i); done.add(nd.i);
+          snap({ kind: 'bwd', block: nd.i });
+        } else {
+          snap({ kind: 'enter', ck: nd });
+          setCur('h' + nd.lo);
+          fwd(nd.kids, true, 'rec', [], nd);
+          setCur(null);
+          bwd(nd.kids);
+          dec('h' + nd.lo);
+        }
+      }
+    }
+    setCur('h0');
+    snap({ kind: 'start' });
+    fwd(prog, true, 'fwd', [], null);
+    setCur(null); grad = true;
+    snap({ kind: 'loss' });
+    bwd(prog);
+    grad = false;
+    snap({ kind: 'end' });
+    return { steps, cks, maxDepth, peak, nF, N, kind };
+  }
+
+  // ---------- narration ----------
+  const sub = n => String(n);
+  function narrate(st, sim) {
+    const N = sim.N;
+    switch (st.kind) {
+      case 'start': return ['Start', 'The input h0 (the token embeddings) arrives. Nothing has been kept yet.', '--muted'];
+      case 'fwd-save': return ['Forward', `Block ${st.block} runs and keeps its residuals R${sub(st.block)} and its input h${st.block}, because its backward step will need them.`, '--fwd'];
+      case 'fwd-nosave': {
+        const outer = st.stack[0];
+        return ['Forward', `Block ${st.block} runs inside checkpoint ${outer.label}, so it keeps nothing. h${st.block} is dropped as soon as h${st.block + 1} exists.` + (outer.lo === st.block && st.block > 0 ? ` ${outer.label} keeps h${outer.lo} as its saved input.` : ''), '--fwd'];
+      }
+      case 'loss': return ['Loss', `Forward is done and the loss is computed. The gradient (rose, 1 unit) starts flowing back from block ${N - 1}.`, '--bwd'];
+      case 'enter': {
+        const c = st.ck;
+        const span = c.hi - c.lo === 1 ? `block ${c.lo}` : `blocks ${c.lo}–${c.hi - 1}`;
+        return ['Rerun begins', `Backward reaches checkpoint ${c.label}, which covers ${span}. It kept only its input h${c.lo}, so it reruns ${span} forward from h${c.lo} to rebuild what backward needs.`, '--rec'];
+      }
+      case 'rec-nosave': {
+        const inner = st.stack[st.stack.length - 1];
+        return ['Rerun', `${st.rc.label} is rerunning: block ${st.block} runs again only to rebuild its output. It sits inside the inner checkpoint ${inner.label}, so it keeps nothing.`, '--rec'];
+      }
+      case 'rec-save': return ['Rerun', `${st.rc.label} is rerunning: block ${st.block} runs again and this time keeps R${st.block}, because its backward step comes next.`, '--rec'];
+      case 'bwd': return ['Backward', `Backward through block ${st.block} uses R${st.block} to produce the gradient for h${st.block}. Then R${st.block} is freed.`, '--bwd'];
+      case 'end': return ['Done', `Every block has its gradient. Peak memory was ${st.peak} units with ${st.nF} block forward passes. Without checkpointing it would be ${noneSim.peak} units with ${N} forward passes.`, '--muted'];
+    }
+  }
+
+  // ---------- state ----------
+  let kind = 'chain', N = 6, sim, noneSim, idx = 0, timer = null;
+
+  function recompute(keepPos) {
+    sim = simulate(kind, N);
+    noneSim = simulate('none', N);
+    const sc = $('#scrub');
+    sc.max = sim.steps.length - 1;
+    if (!keepPos) {
+      // open on an informative state: the first rebuild of a block's residuals during backward
+      const k = sim.steps.findIndex(s => s.kind === 'rec-save');
+      idx = k >= 0 ? k : sim.steps.findIndex(s => s.kind === 'loss');
+    }
+    idx = Math.min(idx, sim.steps.length - 1);
+    renderTabs(); render(); drawTimeline(); drawCharts(); renderTable();
+  }
+
+  function renderTabs() {
+    $('#tabs').innerHTML = STRATS.map(s =>
+      `<button class="tab" role="tab" data-k="${s.id}" aria-selected="${s.id === kind}">${s.name}${s.tag ? `<span class="pill">${s.tag}</span>` : ''}</button>`).join('');
+    $('#watch').innerHTML = STRATS.find(s => s.id === kind).watch;
+  }
+
+  function render() {
+    const st = sim.steps[idx];
+    // lane
+    const lane = $('#lane');
+    lane.style.gridTemplateColumns = `repeat(${N}, 20px minmax(44px, 1fr)) 20px`;
+    let h = '';
+    for (let j = 0; j <= N; j++) {
+      const on = st.live.has('h' + j);
+      h += `<div class="hlab" style="grid-column:${2 * j + 1};grid-row:1">h${j}</div>`;
+      h += `<div class="hcell${on ? ' on' : ''}" style="grid-column:${2 * j + 1};grid-row:2" title="h${j}${on ? ' kept' : ''}"><div class="hbar"></div></div>`;
+    }
+    for (let i = 0; i < N; i++) {
+      let cls = 'blk', stx = '';
+      if (st.block === i && st.kind !== 'enter') {
+        cls += ' k-' + st.kind;
+        stx = { 'fwd-save': 'fwd · keep', 'fwd-nosave': 'fwd · drop', 'rec-save': 'rerun · keep', 'rec-nosave': 'rerun · drop', 'bwd': 'backward' }[st.kind];
+      } else if (st.kind === 'enter' && i >= st.ck.lo && i < st.ck.hi) {
+        cls += ' pending'; stx = 'to rerun';
+      }
+      if (st.done.has(i)) { cls += ' done'; if (!stx) stx = '∇ done'; }
+      const rc = st.recs[i] ? '↻' + st.recs[i] : '';
+      h += `<div class="${cls}" style="grid-column:${2 * i + 2};grid-row:2"><div class="nm">B${i}</div><div class="st">${stx}</div><div class="rc">${rc}</div></div>`;
+      const ron = st.live.has('R' + i);
+      h += `<div class="res${ron ? ' on' : ''}" style="grid-column:${2 * i + 2};grid-row:3">${ron ? 'R' + i : ''}</div>`;
+    }
+    const active = st.kind === 'enter' ? st.ck : st.rc;
+    const supp = new Set(st.stack || []);
+    for (const c of sim.cks) {
+      let cls = 'brk';
+      if (c === active) cls += ' act';
+      else if (supp.has(c)) cls += ' sup';
+      h += `<div class="${cls}" style="grid-column:${2 * c.lo + 1} / ${2 * c.hi + 2};grid-row:${4 + c.depth}"><span>${c.label}</span></div>`;
+    }
+    lane.innerHTML = h;
+
+    // narration
+    const [ph, text, col] = narrate(st, sim);
+    $('#phase').textContent = ph;
+    $('#phase').style.color = `var(${col})`;
+    $('#narr').textContent = text;
+    $('#cF').textContent = st.nF;
+    $('#cB').textContent = st.nB;
+    $('#cM').textContent = st.mem;
+
+    // memory bar
+    const scale = noneSim.peak;
+    $('#noneMax').textContent = scale;
+    $('#memNow').textContent = st.mem;
+    $('#memPeak').textContent = st.peak;
+    const hs = [...st.live].filter(k => k[0] === 'h').sort((a, b) => +a.slice(1) - +b.slice(1));
+    const rs = [...st.live].filter(k => k[0] === 'R').sort((a, b) => +a.slice(1) - +b.slice(1));
+    let mb = '';
+    for (const k of hs) mb += `<div class="seg h" style="width:${100 / scale}%" title="${k}: 1 unit"></div>`;
+    for (const k of rs) mb += `<div class="seg r" style="width:${R * 100 / scale}%" title="${k}: ${R} units">${k}</div>`;
+    if (st.grad) mb += `<div class="seg g" style="width:${100 / scale}%" title="gradient: 1 unit"></div>`;
+    mb += `<div class="peakmark" style="left:calc(${Math.min(st.peak / scale, 1) * 100}% - 1px)" title="peak so far"></div>`;
+    $('#membar').innerHTML = mb;
+
+    // controls
+    $('#scrub').value = idx;
+    $('#stepno').textContent = `${idx + 1} / ${sim.steps.length}`;
+    highlightTimeline();
+  }
+
+  // ---------- timeline ----------
+  const KCOL = k => k.startsWith('fwd') || k === 'start' ? '--fwd' : k.startsWith('rec') || k === 'enter' ? '--rec' : k === 'end' ? '--muted' : '--bwd';
+  let tlGeom = null;
+  function drawTimeline() {
+    const svg = $('#timeline');
+    const W = Math.max(svg.clientWidth || svg.parentNode.clientWidth || 600, 280), H = 150;
+    const L = 34, Rt = 8, T = 10, B = 8;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const S = sim.steps.length, ymax = Math.max(sim.peak * 1.15, 4);
+    const bw = (W - L - Rt) / S;
+    const y = v => H - B - v / ymax * (H - T - B);
+    let g = '';
+    g += `<line x1="${L}" x2="${W - Rt}" y1="${y(0)}" y2="${y(0)}" class="ax"/>`;
+    g += `<line x1="${L}" x2="${W - Rt}" y1="${y(sim.peak)}" y2="${y(sim.peak)}" class="ax" stroke-dasharray="4 4"/>`;
+    g += `<text x="${L - 6}" y="${y(sim.peak) + 4}" text-anchor="end" class="ax-t">${sim.peak}</text>`;
+    g += `<text x="${L - 6}" y="${y(0) + 4}" text-anchor="end" class="ax-t">0</text>`;
+    sim.steps.forEach((s, i) => {
+      const x = L + i * bw;
+      g += `<rect data-i="${i}" x="${x + Math.min(0.5, bw * 0.1)}" y="${y(s.mem)}" width="${Math.max(bw - Math.min(1, bw * 0.2), 0.8)}" height="${y(0) - y(s.mem)}" style="fill:var(${KCOL(s.kind)})" opacity="0.55"/>`;
+    });
+    g += `<rect id="tlCursor" x="0" y="${T - 4}" width="${Math.max(bw, 2)}" height="${H - T - B + 4}" style="fill:none;stroke:var(--fg);stroke-width:1.5" rx="2"/>`;
+    svg.innerHTML = g;
+    tlGeom = { L, bw, S, W };
+    $('#tlPeak').innerHTML = `peak <b class="mono">${sim.peak}</b> units · ${S} steps`;
+    highlightTimeline();
+  }
+  function highlightTimeline() {
+    if (!tlGeom) return;
+    const c = document.getElementById('tlCursor');
+    if (!c) return;
+    c.setAttribute('x', tlGeom.L + idx * tlGeom.bw - (tlGeom.bw < 2 ? 1 : 0));
+    document.querySelectorAll('#timeline rect[data-i]').forEach(r => r.setAttribute('opacity', +r.dataset.i === idx ? '1' : (+r.dataset.i < idx ? '0.75' : '0.3')));
+  }
+  $('#timeline').addEventListener('click', e => {
+    const svg = e.currentTarget, rect = svg.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (tlGeom.W / rect.width);
+    idx = Math.max(0, Math.min(sim.steps.length - 1, Math.floor((x - tlGeom.L) / tlGeom.bw)));
+    stop(); render();
+  });
+
+  // ---------- comparison charts ----------
+  const NS = range(20).map(i => i + 1);
+  const DATA = {};
+  for (const s of STRATS) DATA[s.id] = NS.map(n => { const r = simulate(s.id, n); return { peak: r.peak, nF: r.nF }; });
+
+  function niceStep(max) {
+    const raw = max / 5, p = Math.pow(10, Math.floor(Math.log10(raw)));
+    return [1, 2, 5, 10].map(m => m * p).find(v => v >= raw);
+  }
+  function lineChart(svg, key, yMax, idp) {
+    const W = 480, H = 290, L = 40, Rr = 112, T = 14, Bt = 34;
+    const xs = v => L + (v - 1) / 19 * (W - L - Rr);
+    const ys = v => H - Bt - v / yMax * (H - T - Bt);
+    let g = `<defs><clipPath id="${idp}"><rect x="${L}" y="${T}" width="${W - L - Rr}" height="${H - T - Bt}"/></clipPath></defs>`;
+    const step = niceStep(yMax);
+    for (let v = 0; v <= yMax + 1e-9; v += step) {
+      g += `<line x1="${L}" x2="${W - Rr}" y1="${ys(v)}" y2="${ys(v)}" class="ax"/><text x="${L - 6}" y="${ys(v) + 4}" text-anchor="end" class="ax-t">${v}</text>`;
+    }
+    for (const n of [1, 5, 10, 15, 20]) g += `<text x="${xs(n)}" y="${H - Bt + 18}" text-anchor="middle" class="ax-t">${n}</text>`;
+    g += `<text x="${(L + W - Rr) / 2}" y="${H - 4}" text-anchor="middle" class="ax-t">N (blocks)</text>`;
+    g += `<line x1="${xs(N)}" x2="${xs(N)}" y1="${T}" y2="${H - Bt}" style="stroke:var(--fg)" stroke-dasharray="3 4" opacity="0.5"/>`;
+    const labels = [];
+    for (const s of STRATS) {
+      const vals = DATA[s.id].map(d => d[key]);
+      const pts = vals.map((v, i) => `${xs(NS[i]).toFixed(1)},${ys(v).toFixed(1)}`).join(' ');
+      const w = s.id === 'chain' ? 3 : 2;
+      g += `<polyline points="${pts}" clip-path="url(#${idp})" style="fill:none;stroke:var(${s.color});stroke-width:${w};stroke-linejoin:round"/>`;
+      const cv = vals[N - 1];
+      if (cv <= yMax) g += `<circle cx="${xs(N)}" cy="${ys(cv)}" r="4" style="fill:var(${s.color});stroke:var(--surface);stroke-width:1.5"/>`;
+      const last = vals[vals.length - 1];
+      if (last <= yMax) labels.push({ y: ys(last), x: W - Rr + 6, text: s.name, color: s.color });
+      else {
+        const k = vals.findIndex(v => v > yMax);
+        labels.push({ y: T + 4, x: W - Rr + 6, text: s.name + ' ↑', color: s.color, offChart: true });
+      }
+    }
+    labels.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 15) labels[i].y = labels[i - 1].y + 15;
+    for (const l of labels) g += `<text x="${l.x}" y="${l.y + 4}" class="ln-lab" style="fill:var(${l.color})">${l.text}</text>`;
+    svg.innerHTML = g;
+  }
+  function drawCharts() {
+    const memMax = Math.max(...['flat', 'tree', 'chain'].flatMap(k => DATA[k].map(d => d.peak)));
+    lineChart($('#chMem'), 'peak', Math.ceil(memMax * 1.25 / 10) * 10, 'clipMem');
+    const cmpMax = Math.max(...STRATS.flatMap(s => DATA[s.id].map(d => d.nF)));
+    lineChart($('#chCmp'), 'nF', Math.ceil(cmpMax / 50) * 50, 'clipCmp');
+  }
+  function renderTable() {
+    $('#thN').textContent = `At N = ${N}`;
+    $('#tbody').innerHTML = STRATS.map(s => {
+      const d = DATA[s.id][N - 1];
+      return `<tr class="${s.id === 'chain' ? 'hl' : ''}"><td><span class="sw" style="background:var(${s.color})"></span>${s.name}</td><td>${s.kept}</td><td class="num">${s.mem}</td><td class="num">${s.cmp}</td><td class="num">${d.peak} units · ${d.nF} fwd</td></tr>`;
+    }).join('');
+  }
+
+  // ---------- controls ----------
+  function stop() { if (timer) { clearInterval(timer); timer = null; } $('#bPlay').textContent = 'Play'; }
+  function play() {
+    if (idx >= sim.steps.length - 1) idx = 0;
+    $('#bPlay').textContent = 'Pause';
+    timer = setInterval(() => {
+      if (idx >= sim.steps.length - 1) { stop(); return; }
+      idx++; render();
+    }, +$('#speed').value);
+  }
+  $('#bPlay').onclick = () => timer ? stop() : play();
+  $('#bNext').onclick = () => { stop(); idx = Math.min(idx + 1, sim.steps.length - 1); render(); };
+  $('#bPrev').onclick = () => { stop(); idx = Math.max(idx - 1, 0); render(); };
+  $('#bRestart').onclick = () => { stop(); idx = 0; render(); };
+  $('#scrub').oninput = e => { stop(); idx = +e.target.value; render(); };
+  $('#speed').onchange = () => { if (timer) { stop(); play(); } };
+  $('#nIn').oninput = e => { stop(); N = +e.target.value; $('#nOut').textContent = N; recompute(false); };
+  $('#tabs').addEventListener('click', e => {
+    const b = e.target.closest('.tab'); if (!b) return;
+    stop(); kind = b.dataset.k; recompute(false);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.target.matches('input, select, textarea')) return;
+    if (e.key === 'ArrowRight') { e.preventDefault(); $('#bNext').click(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); $('#bPrev').click(); }
+  });
+  if ('ResizeObserver' in window) new ResizeObserver(() => drawTimeline()).observe($('#timeline').parentNode);
+
+  recompute(false);
+})();
+</script>

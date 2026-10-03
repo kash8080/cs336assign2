@@ -9,6 +9,8 @@ Examples:
     nsys profile --trace=cuda,nvtx --capture-range=nvtx --nvtx-capture=measure --capture-range-end=stop \
         python -m cs336_systems.benchmarking --size small --context-length 512 --annotate-attention
     uv run python -m cs336_systems.benchmarking --size xl --mode train --steps 1 --memory-profile
+    uv run python -m cs336_systems.benchmarking --size xl --context-length 2048 --mode forward_backward \
+        --steps 1 --memory-profile --checkpoint-blocks
 """
 
 import argparse
@@ -151,6 +153,7 @@ def benchmark(args: argparse.Namespace, name: str, config: dict[str, int], devic
         vocab_size=args.vocab_size,
         context_length=args.context_length,
         rope_theta=args.rope_theta,
+        checkpoint_blocks=args.checkpoint_blocks,
         **config,
     ).to(device)
     model.train()
@@ -169,7 +172,8 @@ def benchmark(args: argparse.Namespace, name: str, config: dict[str, int], devic
     snapshot_path = None
     if args.memory_profile is not None:
         precision = args.mixed_precision or "fp32"
-        snapshot_path = f"{args.memory_profile}_{name}_ctx{args.context_length}_{args.mode}_{precision}.pickle"
+        ckpt = "_ckpt" if args.checkpoint_blocks else ""
+        snapshot_path = f"{args.memory_profile}_{name}_ctx{args.context_length}_{args.mode}_{precision}{ckpt}.pickle"
 
     with nvtx_range("measure", device), record_memory_history(snapshot_path):
         steps = [run_step(model, optimizer, x, y, args.mode, device, args.mixed_precision) for _ in range(args.steps)]
@@ -202,6 +206,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vocab-size", type=int, default=10_000)
     p.add_argument("--context-length", type=int, default=128)
     p.add_argument("--rope-theta", type=float, default=10_000.0)
+    p.add_argument("--checkpoint-blocks", action="store_true", help="Wrap each TransformerBlock in torch.utils.checkpoint (one checkpoint per block). Off if omitted.")
 
     # --- data / optimizer ---
     p.add_argument("--batch-size", type=int, default=4)
@@ -240,7 +245,7 @@ def main() -> None:
     else:
         configs = {"custom": {"d_model": args.d_model, "d_ff": args.d_ff, "num_layers": args.num_layers, "num_heads": args.num_heads}}
 
-    print(f"device={device} mode={args.mode} mixed_precision={args.mixed_precision} warmup_steps={args.warmup_steps} steps={args.steps} batch_size={args.batch_size} context_length={args.context_length}")
+    print(f"device={device} mode={args.mode} mixed_precision={args.mixed_precision} checkpoint_blocks={args.checkpoint_blocks} warmup_steps={args.warmup_steps} steps={args.steps} batch_size={args.batch_size} context_length={args.context_length}")
 
     rows = []
     for name, config in configs.items():
